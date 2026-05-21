@@ -453,7 +453,7 @@ curl -sL https://github.com/angerops/autoshelf/releases/download/v0.1.0/checksum
 Then copy `packaging/homebrew/autoshelf.rb` (the canonical formula in this
 repo) to `angerops/homebrew-tap/Formula/autoshelf.rb`, updating in order:
 
-1. `version "0.0.1"` — bump to the new tag (without the `v`).
+1. `version "0.1.0"` — bump to the new tag (without the `v`).
 2. The four `url "..."` lines — replace the version segment in each.
 3. The four `sha256 "..."` lines — paste each digest into its matching
    `on_arm` / `on_intel` block.
@@ -473,11 +473,11 @@ between releases. Only the `--HEAD` path requires Go.
 ```
 .
 ├── main.go
-├── cmd/                 # cobra commands (root, run, once, validate, init)
+├── cmd/                 # cobra commands (root, run, once, validate, init, log)
 ├── internal/
 │   ├── config/          # viper-backed YAML loader + validation
-│   ├── rules/           # match + move engine, tests
-│   └── watcher/         # fsnotify watcher with debounce
+│   ├── rules/           # match + move engine
+│   └── watcher/         # fsnotify watcher + debounce + live config reload
 ├── autoshelf.example.yaml
 ├── packaging/
 │   └── homebrew/
@@ -493,40 +493,31 @@ between releases. Only the `--HEAD` path requires Go.
 ## Tests
 
 ```bash
-make test
+make test          # or: go test ./... -race
 ```
 
-Covers glob matching; all four `on_conflict` policies; the move action
-including missing-destination-dir creation; dry-run; first-rule-wins
-ordering; directory moves; the protected-destinations safety net for
-catch-all dir rules; the loose-folder `ScanOnce` sweep; symlink skipping;
-`copyFile` and `copyDir` directly (including the symlink-recreation and
-device-node refusal paths); the viper discovery regression (binary in
-`.` must not be parsed as YAML); the watcher's `collectDirs`, debounce
-coalescing, distinct-path scheduling, pending-map cleanup, context-cancel
-respect, and end-to-end behavior over real fsnotify (initial scan, file
-creation triggers, remove events ignored, recursive subdir auto-add,
-clean shutdown on cancel); `min_age` deferral (fresh dir held back, past
-threshold released, kind defaults, ScanOnce surfaces deferred list, watcher
-re-queues at retryAt, initial-scan deferreds re-queued; watch-level min_age
-applies when a rule omits its own, rule min_age beats watch min_age in
-both directions including explicit "0s" disabling an inherited delay, YAML
-round-trip with whitespace, invalid watch min_age fails validation); live config reload
-(WatchConfigFile fires on in-place write / atomic rename / late create,
-debounces rapid writes, ignores sibling files and chmod, exits on context
-cancel; ApplyConfig swaps the engine atomically, rejects nil args, leaves
-state untouched on error, triggers a post-reload ScanOnce, re-resolves
-pending timers against the new cfg, drops paths no longer covered, adds /
-removes fsnotify watches in real time, races cleanly with concurrent
-schedule under the race detector, and the end-to-end edit-driven path
-moves previously-stranded files while keeping the old rules live across
-invalid YAML); `ignore_globs` at
-global and per-watch level (browser temp files skipped, Safari `.download`
-directory not descended into during ScanOnce, case-insensitive matching,
-malformed ignore patterns fail validation); config-validation gaps
-(no watches, empty path, no rules, whitespace globs, unknown `on_conflict`
-/ `kind`, unparseable `min_age`); and the `log` command (platform-specific
-default paths including XDG override, missing-file error message, JSON
-record rendering, non-JSON pass-through, malformed-JSON resilience,
-follow-mode appends until context cancel, and slog level / timestamp
-parsing).
+The suite is race-clean and covers each layer:
+
+- **config** — YAML load, normalization, defaults; validation of every
+  required-field / unknown-value / unparseable-duration path; rule-level
+  vs. watch-level `min_age` precedence; the viper-discovery regression
+  that used to feed the compiled binary into the YAML parser.
+- **rules** — glob matching (case-insensitive), all four `on_conflict`
+  policies, file and directory moves including missing-destination
+  creation and cross-device copy+remove, protected destinations for
+  catch-all dir rules, symlink/device-node refusal, `min_age` deferral,
+  `ignore_globs` at global and per-watch level (including the Safari
+  `.download` directory traversal trap).
+- **watcher** — debounce coalescing, pending-map cleanup, recursive
+  subdir auto-add, deferred-entry requeueing — all over real fsnotify.
+  Plus live config reload: file watch fires on in-place write, atomic
+  rename, and late create with debounce; `ApplyConfig` swaps the engine
+  atomically; pending timers re-resolve against the new cfg; concurrent
+  schedule + reload is clean under the race detector.
+- **cmd** — `log` (platform-specific default paths including the XDG
+  override, JSON record rendering, non-JSON passthrough, follow-mode);
+  `init` (the embedded sample matches the repo's example file
+  byte-for-byte and round-trips through `Load`).
+
+For exact coverage, run `go test -v ./...` and read the test names — they
+describe what they verify.
