@@ -275,6 +275,345 @@ func TestOnConflictOverwriteReplacesDestination(t *testing.T) {
 	}
 }
 
+// -----------------------------------------------------------------------------
+// Destructive-path coverage: on_conflict=overwrite is the ONLY documented mode
+// that can lose user data. Every shape it can be invoked in gets a test.
+// -----------------------------------------------------------------------------
+
+// dir-over-dir: source is a directory, destination is a directory of the same
+// name containing OTHER FILES. overwrite must blow away the old tree (the
+// documented contract) and replace it with the source tree, including content
+// only present in source.
+func TestOnConflictOverwriteReplacesExistingDirectory(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+
+	// Pre-existing destination dir with content that must NOT survive.
+	oldDir := filepath.Join(dst, "project")
+	if err := os.MkdirAll(filepath.Join(oldDir, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, "old.txt"), []byte("old-content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, "subdir", "nested.txt"), []byte("old-nested"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Source dir with same name but different content.
+	srcDir := filepath.Join(src, "project")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "new.txt"), []byte("new-content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{
+		Watches: []config.Watch{{
+			Path: src,
+			Rules: []config.Rule{{
+				Name:        "Loose",
+				Match:       config.Match{Globs: []string{"*"}, Kind: config.KindDir},
+				Destination: dst,
+				OnConflict:  config.ConflictOverwrite,
+				MinAge:      "0s",
+			}},
+		}},
+	}
+	e := New(cfg, newTestLogger())
+	ok, _, err := e.HandleEntry(&cfg.Watches[0], srcDir)
+	if err != nil || !ok {
+		t.Fatalf("dir-over-dir overwrite should succeed: ok=%v err=%v", ok, err)
+	}
+
+	// Old content must be gone.
+	if _, err := os.Stat(filepath.Join(dst, "project", "old.txt")); !os.IsNotExist(err) {
+		t.Errorf("old destination content should be destroyed by overwrite, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "project", "subdir")); !os.IsNotExist(err) {
+		t.Errorf("old destination subdir should be destroyed, stat err=%v", err)
+	}
+	// New content must be in place.
+	got, err := os.ReadFile(filepath.Join(dst, "project", "new.txt"))
+	if err != nil {
+		t.Fatalf("new content should be at destination: %v", err)
+	}
+	if string(got) != "new-content" {
+		t.Errorf("new content wrong: %q", got)
+	}
+	// Source must be gone.
+	if _, err := os.Stat(srcDir); !os.IsNotExist(err) {
+		t.Errorf("source dir should be gone after overwrite, stat err=%v", err)
+	}
+}
+
+// file-over-dir: source is a file, destination of the same name is a
+// directory (with content). overwrite is documented as RemoveAll-then-move,
+// so the whole destination directory is destroyed and replaced with the file.
+// This is the SHARPEST edge of overwrite mode and absolutely needs a test —
+// a regression here could nuke a user's whole subfolder for a single file
+// collision.
+func TestOnConflictOverwriteFileOverDirectory(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+
+	// Destination "report.pdf" is actually a DIRECTORY (weird but possible -
+	// Safari .download dirs, or a user mistake).
+	dstAsDir := filepath.Join(dst, "report.pdf")
+	if err := os.MkdirAll(dstAsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dstAsDir, "would-be-lost.txt"), []byte("doomed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srcFile := filepath.Join(src, "report.pdf")
+	if err := os.WriteFile(srcFile, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	e, w := fileEngine(t, src, dst, config.ConflictOverwrite)
+	ok, _, err := e.HandleEntry(w, srcFile)
+	if err != nil || !ok {
+		t.Fatalf("file-over-dir overwrite should succeed: ok=%v err=%v", ok, err)
+	}
+
+	// The directory and its contents are gone (this is what overwrite
+	// promises - and warns about - in the README). Statting through the
+	// old path returns ENOENT or ENOTDIR depending on the platform's reaction
+	// to "this path is now a regular file"; either proves the dir is gone.
+	_, err = os.Stat(filepath.Join(dstAsDir, "would-be-lost.txt"))
+	if err == nil {
+		t.Error("nested file should have been destroyed by RemoveAll")
+	}
+	// In its place, a regular file with the source's content.
+	info, err := os.Stat(filepath.Join(dst, "report.pdf"))
+	if err != nil {
+		t.Fatalf("destination file should exist: %v", err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Errorf("destination should now be a regular file, mode=%v", info.Mode())
+	}
+	got, _ := os.ReadFile(filepath.Join(dst, "report.pdf"))
+	if string(got) != "new" {
+		t.Errorf("new content wrong: %q", got)
+	}
+}
+
+// dir-over-file: source is a directory, destination of the same name is a
+// regular file. overwrite removes the file, source dir lands.
+func TestOnConflictOverwriteDirectoryOverFile(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+
+	// Destination "project" is a file.
+	dstAsFile := filepath.Join(dst, "project")
+	if err := os.WriteFile(dstAsFile, []byte("doomed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Source "project" is a directory.
+	srcDir := filepath.Join(src, "project")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "inner.txt"), []byte("kept"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{
+		Watches: []config.Watch{{
+			Path: src,
+			Rules: []config.Rule{{
+				Name:        "Loose",
+				Match:       config.Match{Globs: []string{"*"}, Kind: config.KindDir},
+				Destination: dst,
+				OnConflict:  config.ConflictOverwrite,
+				MinAge:      "0s",
+			}},
+		}},
+	}
+	e := New(cfg, newTestLogger())
+	ok, _, err := e.HandleEntry(&cfg.Watches[0], srcDir)
+	if err != nil || !ok {
+		t.Fatalf("dir-over-file overwrite should succeed: ok=%v err=%v", ok, err)
+	}
+
+	info, err := os.Stat(filepath.Join(dst, "project"))
+	if err != nil {
+		t.Fatalf("destination should exist: %v", err)
+	}
+	if !info.IsDir() {
+		t.Errorf("destination should now be a directory, mode=%v", info.Mode())
+	}
+	got, _ := os.ReadFile(filepath.Join(dst, "project", "inner.txt"))
+	if string(got) != "kept" {
+		t.Errorf("source content not preserved: %q", got)
+	}
+}
+
+// Sanity: overwrite mode without an actual collision must NOT call
+// RemoveAll on anything. The destination is created fresh and the source
+// lands normally.
+func TestOnConflictOverwriteNoCollisionIsPlainMove(t *testing.T) {
+	src := t.TempDir()
+	dst := filepath.Join(t.TempDir(), "PDFs") // doesn't exist yet
+	srcFile := filepath.Join(src, "fresh.pdf")
+	if err := os.WriteFile(srcFile, []byte("only-copy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	e, w := fileEngine(t, src, dst, config.ConflictOverwrite)
+	ok, _, err := e.HandleEntry(w, srcFile)
+	if err != nil || !ok {
+		t.Fatalf("overwrite with no collision should still move: ok=%v err=%v", ok, err)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "fresh.pdf"))
+	if err != nil || string(got) != "only-copy" {
+		t.Errorf("file should have landed normally; got=%q err=%v", got, err)
+	}
+}
+
+// THE CRITICAL SAFETY TEST. A catch-all dir rule with on_conflict=overwrite
+// would, without the protected-destinations guard, RemoveAll its own
+// destination folder (and every other rule's destination it could see) -
+// destroying every previously-sorted file. Verify the guard holds under
+// the most dangerous policy.
+func TestProtectedDestinationsHoldUnderOverwrite(t *testing.T) {
+	src := t.TempDir()
+	pdfDest := filepath.Join(src, "PDFs")
+	looseDest := filepath.Join(src, "Loose")
+
+	// Pre-populate the PDFs destination with content that MUST survive.
+	if err := os.MkdirAll(pdfDest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	canary := filepath.Join(pdfDest, "previously-sorted.pdf")
+	if err := os.WriteFile(canary, []byte("must-survive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{
+		Watches: []config.Watch{{
+			Path: src,
+			Rules: []config.Rule{
+				{
+					Name:        "PDFs",
+					Match:       config.Match{Globs: []string{"*.pdf"}, Kind: config.KindFile},
+					Destination: pdfDest,
+					OnConflict:  config.ConflictRename,
+				},
+				{
+					Name:        "Loose",
+					Match:       config.Match{Globs: []string{"*"}, Kind: config.KindDir},
+					Destination: looseDest,
+					OnConflict:  config.ConflictOverwrite, // the dangerous policy
+					MinAge:      "0s",
+				},
+			},
+		}},
+	}
+	e := New(cfg, newTestLogger())
+
+	// Try to make the catch-all act on the PDFs destination directly.
+	ok, _, err := e.HandleEntry(&cfg.Watches[0], pdfDest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("protected destination should never be acted on; the catch-all moved it")
+	}
+
+	// The canary inside the protected destination must still exist with
+	// unchanged content.
+	got, err := os.ReadFile(canary)
+	if err != nil {
+		t.Fatalf("canary file should still exist: %v", err)
+	}
+	if string(got) != "must-survive" {
+		t.Errorf("canary content corrupted: %q", got)
+	}
+	// And the catch-all's own destination must also be untouchable.
+	if err := os.MkdirAll(looseDest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	canary2 := filepath.Join(looseDest, "marker")
+	if err := os.WriteFile(canary2, []byte("untouchable"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ok, _, err = e.HandleEntry(&cfg.Watches[0], looseDest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("rule's own destination should be protected from its own catch-all")
+	}
+	got, _ = os.ReadFile(canary2)
+	if string(got) != "untouchable" {
+		t.Errorf("loose destination content corrupted: %q", got)
+	}
+}
+
+// Verify the unique-suffix rename path does not silently clobber data when
+// many similarly-named files already exist - the loop must keep walking
+// the suffix sequence until a free slot is found, not give up at the wrong
+// index or return an in-use name.
+func TestOnConflictRenameSkipsAlreadyTakenSuffixes(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+
+	// Pre-populate dst with foo.txt, foo (1).txt, foo (2).txt - all with
+	// canary content that must NOT be overwritten.
+	for _, name := range []string{"foo.txt", "foo (1).txt", "foo (2).txt"} {
+		if err := os.WriteFile(filepath.Join(dst, name), []byte("KEEP:"+name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srcFile := filepath.Join(src, "foo.txt")
+	if err := os.WriteFile(srcFile, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Use a file rule but accept the .txt extension via a tweaked glob.
+	cfg := &config.Config{
+		Watches: []config.Watch{{
+			Path: src,
+			Rules: []config.Rule{{
+				Name:        "Text",
+				Match:       config.Match{Globs: []string{"*.txt"}, Kind: config.KindFile},
+				Destination: dst,
+				OnConflict:  config.ConflictRename,
+			}},
+		}},
+	}
+	e := New(cfg, newTestLogger())
+	if _, _, err := e.HandleEntry(&cfg.Watches[0], srcFile); err != nil {
+		t.Fatal(err)
+	}
+
+	// Every pre-existing file must still have its original content.
+	for _, name := range []string{"foo.txt", "foo (1).txt", "foo (2).txt"} {
+		got, err := os.ReadFile(filepath.Join(dst, name))
+		if err != nil {
+			t.Errorf("%s should still exist: %v", name, err)
+			continue
+		}
+		want := "KEEP:" + name
+		if string(got) != want {
+			t.Errorf("%s was clobbered: got %q want %q", name, got, want)
+		}
+	}
+	// The new file must have landed at foo (3).txt - the first free slot.
+	got, err := os.ReadFile(filepath.Join(dst, "foo (3).txt"))
+	if err != nil {
+		t.Fatalf("new file should be at foo (3).txt: %v", err)
+	}
+	if string(got) != "new" {
+		t.Errorf("foo (3).txt content wrong: %q", got)
+	}
+}
+
 func TestDirKindMovesDirectoryTree(t *testing.T) {
 	src := t.TempDir()
 	dst := filepath.Join(t.TempDir(), "Loose")
