@@ -359,10 +359,14 @@ real owner — launchd does not expand `~` or env vars inside the plist):
         <string>/Users/USERNAME/.local/bin/autoshelf</string>
         <string>run</string>
     </array>
-    <key>RunAtLoad</key>        <true/>
-    <key>KeepAlive</key>        <true/>
-    <key>StandardOutPath</key>  <string>/Users/USERNAME/Library/Logs/autoshelf.log</string>
-    <key>StandardErrorPath</key><string>/Users/USERNAME/Library/Logs/autoshelf.log</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/USERNAME/Library/Logs/autoshelf.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/USERNAME/Library/Logs/autoshelf.log</string>
 </dict>
 </plist>
 ```
