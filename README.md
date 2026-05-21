@@ -19,6 +19,39 @@ destination directories are created automatically.
 The watcher uses OS-level filesystem events (fsnotify) and runs an initial
 sweep of each watched folder on startup so existing files get sorted too.
 
+## Limitations
+
+### Network shares (SMB, NFS, AFP)
+
+autoshelf gets real-time events from the kernel — kqueue on macOS, inotify
+on Linux. Neither one delivers events for changes that originate on a
+*different machine*. If a remote host drops a file into a share you have
+mounted locally, your Mac's kernel sees a stale dirent, not a write event,
+so the daemon's watch will not fire.
+
+Two scenarios to keep separate:
+
+- **Writes from this machine into a mounted share** — these are local
+  syscalls. kqueue / inotify see them; autoshelf reacts in real time. Same
+  for sync-client writes (Dropbox, iCloud Drive, Google Drive, OneDrive) —
+  from the kernel's perspective the sync client is just a local process
+  writing into a local directory.
+- **Writes from another machine into the same share** — kernel sees no
+  event. autoshelf will not pick up the file until the next time something
+  brings the watch around to it.
+
+The pragmatic workaround is `autoshelf once` on a timer. It runs the same
+rule engine in one-shot mode (initial sweep, exit) and exits cleanly, so
+it's safe to fire from `cron`, a `launchd` `StartInterval` plist, or a
+systemd timer. Pick a cadence that matches how quickly you need files
+sorted — every 5 minutes is plenty for most "drop a file on the NAS" flows.
+
+If you want to mix modes (real-time for `~/Downloads`, polling for
+`/Volumes/NAS/Inbox`), run `autoshelf run` for the local watches and a
+separate `autoshelf once` on a timer with a config that only declares the
+remote watches. Both invocations are independent processes; they don't
+interfere.
+
 ## Install
 
 ### Homebrew (recommended on macOS / Linuxbrew)
