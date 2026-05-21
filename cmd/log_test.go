@@ -100,7 +100,20 @@ func TestDefaultLogPathPicksExistingFile(t *testing.T) {
 // When no candidate file exists, defaultLogPath returns the platform default
 // so the error message from streamLog points at the most likely intended
 // location.
+//
+// Skipped on machines where the standard brew log paths already exist on
+// disk - that situation is the explicit happy path for `autoshelf log` (it
+// will rightly prefer the brew location) and not the fallback case the
+// test wants to verify. CI runs on clean VMs so it never hits the skip.
 func TestDefaultLogPathFallsBackToPlatformDefault(t *testing.T) {
+	for _, p := range []string{
+		"/opt/homebrew/var/log/autoshelf.log",
+		"/usr/local/var/log/autoshelf.log",
+	} {
+		if _, err := os.Stat(p); err == nil {
+			t.Skipf("standard brew log path %s exists on this machine; cannot exercise pure-fallback case", p)
+		}
+	}
 	t.Setenv("HOMEBREW_PREFIX", "/nonexistent/brew/prefix")
 	if got, want := defaultLogPath(), platformDefaultLogPath(); got != want {
 		t.Errorf("fallback: got %q want %q", got, want)
