@@ -425,12 +425,12 @@ and creates the GitHub Release with everything attached.
 2. Tag and push:
 
    ```bash
-   git tag -a v0.0.1 -m "v0.0.1"
-   git push origin v0.0.1
+   git tag -a v0.1.0 -m "v0.1.0"
+   git push origin v0.1.0
    ```
 
 3. Watch GitHub Actions. When the `release` job finishes, the new release
-   is live at `https://github.com/angerops/autoshelf/releases/tag/v0.0.1`
+   is live at `https://github.com/angerops/autoshelf/releases/tag/v0.1.0`
    with four `.tar.gz` archives and a `checksums.txt` attached, plus the
    auto-generated release notes from commits since the previous tag.
 
@@ -443,11 +443,11 @@ every release. The four sha256 values are already in the release's
 `checksums.txt`; grab them all with one curl:
 
 ```bash
-curl -sL https://github.com/angerops/autoshelf/releases/download/v0.0.1/checksums.txt
-# 0123…  autoshelf-v0.0.1-darwin-arm64.tar.gz
-# abcd…  autoshelf-v0.0.1-darwin-amd64.tar.gz
-# 4567…  autoshelf-v0.0.1-linux-arm64.tar.gz
-# ef89…  autoshelf-v0.0.1-linux-amd64.tar.gz
+curl -sL https://github.com/angerops/autoshelf/releases/download/v0.1.0/checksums.txt
+# 0123…  autoshelf-v0.1.0-darwin-arm64.tar.gz
+# abcd…  autoshelf-v0.1.0-darwin-amd64.tar.gz
+# 4567…  autoshelf-v0.1.0-linux-arm64.tar.gz
+# ef89…  autoshelf-v0.1.0-linux-amd64.tar.gz
 ```
 
 Then copy `packaging/homebrew/autoshelf.rb` (the canonical formula in this
