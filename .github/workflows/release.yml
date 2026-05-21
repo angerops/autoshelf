@@ -1,0 +1,127 @@
+# Release workflow.
+#
+# Triggers on push of a tag matching v* (e.g. v0.0.1, v1.2.3). Runs tests,
+# cross-builds binaries for the four supported targets, packages each as a
+# tar.gz, generates a checksums file, and uploads everything to a GitHub
+# Release at the tag.
+#
+# To cut a release:
+#   git tag -a v0.0.1 -m "v0.0.1"
+#   git push origin v0.0.1
+#
+# The workflow file must exist on the tagged commit, so the first release
+# requires pushing this file to main first, then tagging from a commit that
+# includes it.
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  # Required for softprops/action-gh-release to create the GitHub Release
+  # and upload artifacts. GITHUB_TOKEN is provided automatically.
+  contents: write
+
+jobs:
+
+  # Run the full test suite before producing any artifacts. A tagged commit
+  # that doesn't pass tests should never reach the release page.
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./... -count=1
+
+  # Cross-build for each supported target in parallel. The Makefile's
+  # build-<target> rules already inject the version via ldflags; we just
+  # pass VERSION=<tag> so it gets the release version rather than whatever
+  # git describe would otherwise produce on the CI checkout.
+  build:
+    name: build ${{ matrix.target }}
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+          - target: darwin-amd64
+          - target: linux-amd64
+          - target: linux-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: make VERSION=${{ github.ref_name }} build-${{ matrix.target }}
+
+      # Package as <name>-<version>-<target>.tar.gz containing a single
+      # "autoshelf" binary, so end users get a predictable shape after extract.
+      - name: Package
+        run: |
+          set -euo pipefail
+          stage=$(mktemp -d)
+          cp autoshelf-${{ matrix.target }} "$stage/autoshelf"
+          cp LICENSE README.md "$stage/"
+          archive=autoshelf-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+          tar -C "$stage" -czf "$archive" autoshelf LICENSE README.md
+          shasum -a 256 "$archive" > "$archive.sha256"
+          ls -lh "$archive" "$archive.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: autoshelf-${{ matrix.target }}
+          path: |
+            autoshelf-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+            autoshelf-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
+          retention-days: 7
+
+  # Collect every target's artifact, combine into a single checksums.txt,
+  # and create the GitHub Release with all assets attached.
+  release:
+    name: release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Consolidated checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          # Strip per-file .sha256 lines into one tidy checksums.txt that
+          # users can verify with `shasum -a 256 -c checksums.txt`.
+          cat *.tar.gz.sha256 > checksums.txt
+          rm *.tar.gz.sha256
+          echo "----- checksums.txt -----"
+          cat checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt

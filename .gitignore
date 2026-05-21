@@ -1,0 +1,43 @@
+# --- Build outputs ---
+# Local builds drop the binary into the repo root; cross-builds and release
+# archives both use the autoshelf-* prefix (see Makefile + release workflow,
+# which produces autoshelf-<tag>-<os>-<arch>.tar.gz).
+autoshelf
+autoshelf-*
+*.exe
+
+# --- Go test + profiling artifacts ---
+*.test
+*.out
+*.cover
+coverage.out
+*.prof
+*.pprof
+
+# --- Release tooling (if/when adopted) ---
+dist/
+
+# --- LLM / coding-agent scratch state ---
+# Local-only session data, plans, memory, prompt overrides. Some of these
+# can contain machine-specific paths or unredacted notes; none of it belongs
+# in the public repo.
+.claude/
+CLAUDE.local.md
+.aider*
+.cursor/
+.cursorrules
+.continue/
+.windsurf*
+.codex/
+.goose/
+
+# --- Editor / IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OS metadata ---
+.DS_Store
+Thumbs.db
