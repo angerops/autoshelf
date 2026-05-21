@@ -436,21 +436,37 @@ and creates the GitHub Release with everything attached.
 
 ### Bumping the Homebrew formula
 
-The formula uses the GitHub-generated source tarball (not the binary
-archives the workflow uploads), so step three is computing that tarball's
-sha256:
+The formula installs the **pre-built binary** matching the user's OS + arch
+from the release the workflow just produced, so no Go toolchain is needed
+on the user's machine. There are four per-arch URL/sha256 pairs to bump on
+every release. The four sha256 values are already in the release's
+`checksums.txt`; grab them all with one curl:
 
 ```bash
-curl -sL https://github.com/angerops/autoshelf/archive/refs/tags/v0.0.1.tar.gz | shasum -a 256
+curl -sL https://github.com/angerops/autoshelf/releases/download/v0.0.1/checksums.txt
+# 0123…  autoshelf-v0.0.1-darwin-arm64.tar.gz
+# abcd…  autoshelf-v0.0.1-darwin-amd64.tar.gz
+# 4567…  autoshelf-v0.0.1-linux-arm64.tar.gz
+# ef89…  autoshelf-v0.0.1-linux-amd64.tar.gz
 ```
 
 Then copy `packaging/homebrew/autoshelf.rb` (the canonical formula in this
-repo) to `angerops/homebrew-tap/Formula/autoshelf.rb`, updating the `url`
-tag and the `sha256` field. Commit and push the tap. Users get the new
-version on their next `brew upgrade autoshelf`.
+repo) to `angerops/homebrew-tap/Formula/autoshelf.rb`, updating in order:
+
+1. `version "0.0.1"` — bump to the new tag (without the `v`).
+2. The four `url "..."` lines — replace the version segment in each.
+3. The four `sha256 "..."` lines — paste each digest into its matching
+   `on_arm` / `on_intel` block.
+
+Commit and push the tap. Users get the new version on their next
+`brew upgrade autoshelf`.
 
 The formula lives in this repo at `packaging/homebrew/autoshelf.rb` as the
 source of truth; the tap repo is just a publishing target.
+
+`brew install --HEAD angerops/tap/autoshelf` continues to work as a
+build-from-source escape hatch for users who want to install off `main`
+between releases. Only the `--HEAD` path requires Go.
 
 ## Layout
 
